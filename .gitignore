@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+batch*.py
+words_raw.json
+eng.xlsx
+.DS_Store
