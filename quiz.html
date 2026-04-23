@@ -158,6 +158,7 @@ async function sha256(s){
 function unlock(){
   document.getElementById('gate').style.display='none';
   document.getElementById('mainContainer').style.display='';
+  if(typeof syncFromCloud==='function') syncFromCloud();
 }
 if(localStorage.getItem('eigoUnlocked')==='1'){ unlock(); }
 document.getElementById('gateForm').addEventListener('submit', async (e)=>{
@@ -183,11 +184,67 @@ let wrong = [];   // objects: {word, jp, pos, your}
 let hintShown = false;
 let answered = false;
 
-// === error tracking (persistent) ===
+// === error tracking (persistent + cloud sync) ===
+const SUPA_URL = 'https://qelayhmlovmbmhacfcxi.supabase.co';
+const SUPA_KEY = 'sb_publishable_C9Zol_3rNpSqyzG5JY-sYg_sy0EShh8';
+const SUPA_HEADERS = { 'apikey': SUPA_KEY, 'Authorization': 'Bearer '+SUPA_KEY, 'Content-Type': 'application/json' };
+
 let errors = {};
 try { errors = JSON.parse(localStorage.getItem('eigoErrors') || '{}'); } catch(e){ errors = {}; }
-function saveErrors(){ localStorage.setItem('eigoErrors', JSON.stringify(errors)); }
-function recordError(w){ errors[w.word] = (errors[w.word]||0) + 1; saveErrors(); }
+function saveLocal(){ localStorage.setItem('eigoErrors', JSON.stringify(errors)); }
+
+async function fetchRemote(){
+  try {
+    const r = await fetch(SUPA_URL+'/rest/v1/word_errors?select=word,count', { headers: SUPA_HEADERS });
+    if(!r.ok) return null;
+    const rows = await r.json();
+    const remote = {};
+    for(const row of rows){ remote[row.word] = row.count; }
+    return remote;
+  } catch(e){ console.warn('fetchRemote:', e); return null; }
+}
+
+async function upsertRemote(word, count){
+  try {
+    await fetch(SUPA_URL+'/rest/v1/word_errors', {
+      method: 'POST',
+      headers: { ...SUPA_HEADERS, 'Prefer': 'resolution=merge-duplicates' },
+      body: JSON.stringify({ word, count, updated_at: new Date().toISOString() })
+    });
+  } catch(e){ console.warn('upsertRemote:', e); }
+}
+
+async function deleteAllRemote(){
+  try {
+    await fetch(SUPA_URL+'/rest/v1/word_errors?word=neq.__never__', {
+      method: 'DELETE', headers: SUPA_HEADERS
+    });
+  } catch(e){ console.warn('deleteAllRemote:', e); }
+}
+
+async function syncFromCloud(){
+  const remote = await fetchRemote();
+  if(!remote) return;
+  // merge: take max of local vs remote for each word
+  const keys = new Set([...Object.keys(errors), ...Object.keys(remote)]);
+  const toPush = [];
+  for(const k of keys){
+    const local = errors[k]||0, rem = remote[k]||0;
+    const max = Math.max(local, rem);
+    if(max>0) errors[k] = max;
+    if(max !== rem) toPush.push({ word: k, count: max });
+  }
+  saveLocal();
+  updateStats();
+  // push merged deltas back so other devices catch up
+  for(const r of toPush) upsertRemote(r.word, r.count);
+}
+
+function recordError(w){
+  errors[w.word] = (errors[w.word]||0) + 1;
+  saveLocal();
+  upsertRemote(w.word, errors[w.word]); // fire-and-forget
+}
 function updateStats(){
   const vals = Object.values(errors);
   const wordCount = vals.filter(c=>c>0).length;
@@ -229,9 +286,10 @@ updateStats();
 // === reset errors ===
 document.getElementById('resetErrorsBtn').onclick = ()=>{
   if(Object.keys(errors).length===0){ alert('記録はまだありません'); return; }
-  if(confirm('間違い記録をすべて削除しますか？')){
+  if(confirm('間違い記録をすべて削除しますか？（クラウドの記録も削除されます）')){
     errors = {};
-    saveErrors();
+    saveLocal();
+    deleteAllRemote();
     updateStats();
   }
 };
@@ -370,7 +428,10 @@ $('retryWrongBtn').onclick = ()=>{
   showQuestion();
 };
 
-$('restartBtn').onclick = ()=>{ updateStats(); show('setup'); };
+$('restartBtn').onclick = ()=>{ updateStats(); show('setup'); syncFromCloud(); };
+
+// sync on page load if already unlocked in this browser
+if(localStorage.getItem('eigoUnlocked')==='1'){ syncFromCloud(); }
 </script>
 </body>
 </html>
