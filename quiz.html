@@ -89,13 +89,22 @@ button.danger:hover{background:#a22}
     </div>
     <div class="presets" id="presets"></div>
     <div class="options">
-      <label><input type="checkbox" id="shuffle"> ランダム出題</label>
+      <label>出題順:
+        <select id="orderMode" style="padding:6px 8px;border:1.5px solid #ccd;border-radius:6px;font-family:inherit;font-size:.9rem">
+          <option value="order">順番</option>
+          <option value="random">ランダム</option>
+          <option value="errors">間違えた回数が多い順</option>
+        </select>
+      </label>
       <label><input type="checkbox" id="idiomToggle"> 熟語(1101-1500)も含む</label>
     </div>
     <div class="action-row">
       <button id="startBtn">テスト開始</button>
     </div>
     <p class="info" id="setupInfo">全1495問（単語1100 + 熟語395）</p>
+    <div class="action-row" style="margin-top:4px">
+      <button id="resetErrorsBtn" class="ghost" style="font-size:.8rem;padding:5px 10px">間違い記録をリセット</button>
+    </div>
   </div>
 
   <!-- 画面2: 出題 -->
@@ -174,6 +183,19 @@ let wrong = [];   // objects: {word, jp, pos, your}
 let hintShown = false;
 let answered = false;
 
+// === error tracking (persistent) ===
+let errors = {};
+try { errors = JSON.parse(localStorage.getItem('eigoErrors') || '{}'); } catch(e){ errors = {}; }
+function saveErrors(){ localStorage.setItem('eigoErrors', JSON.stringify(errors)); }
+function recordError(w){ errors[w.word] = (errors[w.word]||0) + 1; saveErrors(); }
+function updateStats(){
+  const vals = Object.values(errors);
+  const wordCount = vals.filter(c=>c>0).length;
+  const total = vals.reduce((a,b)=>a+b, 0);
+  document.getElementById('setupInfo').innerHTML =
+    `全1495問（単語1100 + 熟語395）<br>累計間違い: ${wordCount}語 / ${total}回`;
+}
+
 // === helpers ===
 const $ = id => document.getElementById(id);
 function show(which){
@@ -202,6 +224,17 @@ function buildPresets(){
   });
 }
 buildPresets();
+updateStats();
+
+// === reset errors ===
+document.getElementById('resetErrorsBtn').onclick = ()=>{
+  if(Object.keys(errors).length===0){ alert('記録はまだありません'); return; }
+  if(confirm('間違い記録をすべて削除しますか？')){
+    errors = {};
+    saveErrors();
+    updateStats();
+  }
+};
 
 // === start ===
 $('startBtn').onclick = ()=>{
@@ -214,8 +247,15 @@ $('startBtn').onclick = ()=>{
     return true;
   });
   if(pool.length===0){ alert('該当する単語がありません'); return; }
-  if($('shuffle').checked){
+  const mode = $('orderMode').value;
+  if(mode==='random'){
     for(let i=pool.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [pool[i],pool[j]]=[pool[j],pool[i]]; }
+  } else if(mode==='errors'){
+    pool.sort((a,b)=>{
+      const ea = errors[a.word]||0, eb = errors[b.word]||0;
+      if(eb!==ea) return eb-ea;
+      return a.no.localeCompare(b.no);
+    });
   }
   queue = pool;
   idx = 0;
@@ -254,6 +294,7 @@ $('hintBtn').onclick = ()=>{
 $('skipBtn').onclick = ()=>{
   const w = queue[idx];
   wrong.push({word:w.word, jp:w.jp, pos:w.pos, your:'（スキップ）'});
+  recordError(w);
   judge(false, w, '');
 };
 
@@ -265,7 +306,7 @@ function doSubmit(){
   const your = $('answerInput').value;
   const ok = normalize(your) === normalize(w.word);
   if(ok) correctCount++;
-  else wrong.push({word:w.word, jp:w.jp, pos:w.pos, your:your||'（未入力）'});
+  else { wrong.push({word:w.word, jp:w.jp, pos:w.pos, your:your||'（未入力）'}); recordError(w); }
   judge(ok, w, your);
 }
 
@@ -308,7 +349,8 @@ function showResult(){
     wrong.forEach(w=>{
       const d = document.createElement('div');
       d.className = 'wrong-item';
-      d.innerHTML = `<span class="w">${escapeHtml(w.word)}</span><span class="j">${posLabel(w.pos)} / ${escapeHtml(w.jp)}</span>`;
+      const cnt = errors[w.word]||0;
+      d.innerHTML = `<span class="w">${escapeHtml(w.word)}</span><span class="j">${posLabel(w.pos)} / ${escapeHtml(w.jp)} <small style="color:#999">累計${cnt}回</small></span>`;
       wl.appendChild(d);
     });
   } else {
@@ -322,13 +364,13 @@ $('retryWrongBtn').onclick = ()=>{
   if(wrong.length===0) return;
   queue = wrong.map(w=>WORDS.find(x=>x.word===w.word && x.jp===w.jp));
   idx = 0; correctCount = 0; wrong = [];
-  if($('shuffle').checked){
+  if($('orderMode').value==='random'){
     for(let i=queue.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [queue[i],queue[j]]=[queue[j],queue[i]]; }
   }
   showQuestion();
 };
 
-$('restartBtn').onclick = ()=>{ show('setup'); };
+$('restartBtn').onclick = ()=>{ updateStats(); show('setup'); };
 </script>
 </body>
 </html>
