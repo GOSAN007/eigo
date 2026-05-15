@@ -53,6 +53,25 @@ button.danger:hover{background:#a22}
 #gate input:focus{border-color:#1a5490}
 #gate button{width:100%}
 #gate .err{color:#c33;font-size:.85rem;min-height:1.2em;margin-top:8px}
+.pm-h{font-size:1.15rem;color:#1a5490}
+.pm-note{color:#666;font-size:.9rem;margin:10px 0 14px;text-align:center}
+#parentGate input{width:100%;padding:12px;font-size:1.05rem;border:1.5px solid #ccd;border-radius:8px;margin-bottom:10px;text-align:center;font-family:inherit;outline:none}
+#parentGate input:focus{border-color:#1a5490}
+.pm-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px}
+.pm-stat{background:#eef4fa;border-radius:10px;padding:12px 8px;text-align:center}
+.pm-stat .v{font-size:1.5rem;font-weight:700;color:#1a5490;line-height:1.1}
+.pm-stat .l{font-size:.72rem;color:#667;margin-top:4px}
+.pm-loading{text-align:center;color:#999;padding:14px;font-size:.9rem}
+.pm-day{font-size:.85rem;font-weight:700;color:#555;margin:16px 0 8px;border-bottom:1px solid #e3e8ec;padding-bottom:4px}
+.pm-sess{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;background:#fafbfc;border-radius:8px;margin:6px 0;font-size:.9rem}
+.pm-sess .t{color:#888;font-size:.82rem;min-width:46px}
+.pm-sess .meta{flex:1;color:#555}
+.pm-sess .meta small{color:#999}
+.pm-sess .sc{font-weight:700;padding:3px 10px;border-radius:12px;font-size:.85rem;white-space:nowrap}
+.sc.good{background:#e8f5e9;color:#2e7d32}
+.sc.mid{background:#fff8e1;color:#f57f17}
+.sc.bad{background:#ffebee;color:#c62828}
+.pm-empty{text-align:center;color:#999;padding:24px}
 @media(max-width:480px){
   h1{font-size:1.2rem}
   .jp{font-size:1.6rem}
@@ -94,6 +113,7 @@ button.danger:hover{background:#a22}
           <option value="order">順番</option>
           <option value="random">ランダム</option>
           <option value="errors">間違えた回数が多い順</option>
+          <option value="wrongRandom">間違えた単語からランダム</option>
         </select>
       </label>
       <label><input type="checkbox" id="idiomToggle"> 熟語(1101-1500)も含む</label>
@@ -104,6 +124,7 @@ button.danger:hover{background:#a22}
     <p class="info" id="setupInfo">全1495問（単語1100 + 熟語395）</p>
     <div class="action-row" style="margin-top:4px">
       <button id="resetErrorsBtn" class="ghost" style="font-size:.8rem;padding:5px 10px">間違い記録をリセット</button>
+      <button id="parentBtn" class="ghost" style="font-size:.8rem;padding:5px 10px">👨‍👩‍👧 家長モード</button>
     </div>
   </div>
 
@@ -146,6 +167,38 @@ button.danger:hover{background:#a22}
       <button type="button" id="restartBtn">最初からやり直す</button>
     </div>
   </div>
+
+  <!-- 画面: 家長モード -->
+  <div id="screen-parent" class="card hide">
+    <div id="parentGate">
+      <h2 class="pm-h">👨‍👩‍👧 家長モード</h2>
+      <p class="pm-note" id="parentGateNote">保護者パスワードを入力してください</p>
+      <form id="parentGateForm">
+        <input type="password" id="parentPwInput" autocomplete="off" placeholder="パスワード">
+        <input type="password" id="parentPwInput2" autocomplete="off" placeholder="パスワード（確認）" class="hide">
+        <div class="action-row" style="margin-top:8px">
+          <button type="submit" id="parentPwBtn">確認</button>
+          <button type="button" class="ghost" id="parentCancelBtn">戻る</button>
+        </div>
+      </form>
+      <div class="err" id="parentPwErr" style="text-align:center"></div>
+    </div>
+    <div id="parentDash" class="hide">
+      <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:14px">
+        <h2 class="pm-h" style="margin:0">📊 学習レポート</h2>
+        <div style="display:flex;gap:8px">
+          <button class="ghost" id="parentRefreshBtn" style="font-size:.8rem;padding:6px 10px">更新</button>
+          <button class="ghost" id="parentBackBtn" style="font-size:.8rem;padding:6px 10px">戻る</button>
+        </div>
+      </div>
+      <div class="pm-stats" id="parentStats"></div>
+      <div class="pm-loading hide" id="parentLoading">読み込み中...</div>
+      <div id="parentList"></div>
+      <div class="action-row" style="margin-top:16px">
+        <button class="ghost" id="parentChangePwBtn" style="font-size:.8rem;padding:6px 10px">保護者パスワードを変更</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -183,6 +236,7 @@ let correctCount = 0;
 let wrong = [];   // objects: {word, jp, pos, your}
 let hintShown = false;
 let answered = false;
+let curMode = 'order', curFrom = null, curTo = null;
 
 // === error tracking (persistent + cloud sync) ===
 const SUPA_URL = 'https://qelayhmlovmbmhacfcxi.supabase.co';
@@ -256,7 +310,7 @@ function updateStats(){
 // === helpers ===
 const $ = id => document.getElementById(id);
 function show(which){
-  ['setup','quiz','judge','result'].forEach(s=>{
+  ['setup','quiz','judge','result','parent'].forEach(s=>{
     $('screen-'+s).classList.toggle('hide', s!==which);
   });
 }
@@ -295,26 +349,49 @@ document.getElementById('resetErrorsBtn').onclick = ()=>{
 };
 
 // === start ===
+function shuffle(arr){
+  for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]]; }
+  return arr;
+}
+
+$('orderMode').onchange = ()=>{
+  const wr = $('orderMode').value==='wrongRandom';
+  $('from').disabled = wr;
+  $('to').disabled = wr;
+  $('idiomToggle').disabled = wr;
+};
+
 $('startBtn').onclick = ()=>{
-  const a = parseInt($('from').value), b = parseInt($('to').value);
-  if(!(a>=1 && b>=a && b<=1500)){ alert('範囲が正しくありません'); return; }
-  let pool = WORDS.filter(w=>{
-    const n = parseInt(w.no);
-    if(n<a || n>b) return false;
-    if(!$('idiomToggle').checked && n>=1101) return false;
-    return true;
-  });
-  if(pool.length===0){ alert('該当する単語がありません'); return; }
   const mode = $('orderMode').value;
-  if(mode==='random'){
-    for(let i=pool.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [pool[i],pool[j]]=[pool[j],pool[i]]; }
-  } else if(mode==='errors'){
-    pool.sort((a,b)=>{
-      const ea = errors[a.word]||0, eb = errors[b.word]||0;
-      if(eb!==ea) return eb-ea;
-      return a.no.localeCompare(b.no);
+  let pool;
+  if(mode==='wrongRandom'){
+    // 間違えた単語だけを範囲に関係なくランダム出題
+    pool = WORDS.filter(w=>(errors[w.word]||0) > 0);
+    if(pool.length===0){ alert('間違えた単語の記録がまだありません'); return; }
+    shuffle(pool);
+    curFrom = null; curTo = null;
+  } else {
+    const a = parseInt($('from').value), b = parseInt($('to').value);
+    if(!(a>=1 && b>=a && b<=1500)){ alert('範囲が正しくありません'); return; }
+    pool = WORDS.filter(w=>{
+      const n = parseInt(w.no);
+      if(n<a || n>b) return false;
+      if(!$('idiomToggle').checked && n>=1101) return false;
+      return true;
     });
+    if(pool.length===0){ alert('該当する単語がありません'); return; }
+    if(mode==='random'){
+      shuffle(pool);
+    } else if(mode==='errors'){
+      pool.sort((x,y)=>{
+        const ex = errors[x.word]||0, ey = errors[y.word]||0;
+        if(ey!==ex) return ey-ex;
+        return x.no.localeCompare(y.no);
+      });
+    }
+    curFrom = a; curTo = b;
   }
+  curMode = mode;
   queue = pool;
   idx = 0;
   correctCount = 0;
@@ -415,6 +492,13 @@ function showResult(){
     wl.innerHTML = '<h3 style="text-align:center;color:#2e7d32">全問正解！🎉</h3>';
   }
   $('retryWrongBtn').disabled = wrong.length===0;
+  if(total>0){
+    recordSession({
+      ts: new Date().toISOString(),
+      from: curFrom, to: curTo, mode: curMode,
+      total, correct: correctCount, wrong: wrong.length
+    });
+  }
   show('result');
 }
 
@@ -423,12 +507,236 @@ $('retryWrongBtn').onclick = ()=>{
   queue = wrong.map(w=>WORDS.find(x=>x.word===w.word && x.jp===w.jp));
   idx = 0; correctCount = 0; wrong = [];
   if($('orderMode').value==='random'){
-    for(let i=queue.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [queue[i],queue[j]]=[queue[j],queue[i]]; }
+    shuffle(queue);
   }
+  curMode = 'retryWrong'; curFrom = null; curTo = null;
   showQuestion();
 };
 
 $('restartBtn').onclick = ()=>{ updateStats(); show('setup'); syncFromCloud(); };
+
+// === 家長モード: session history + parent dashboard ===
+let DEVICE_ID = localStorage.getItem('eigoDeviceId');
+if(!DEVICE_ID){ DEVICE_ID = 'd'+Math.random().toString(36).slice(2,8); localStorage.setItem('eigoDeviceId', DEVICE_ID); }
+
+let sessions = [];
+try { sessions = JSON.parse(localStorage.getItem('eigoSessions') || '[]'); } catch(e){ sessions = []; }
+
+function modeLabel(m){
+  return ({order:'順番', random:'ランダム', errors:'間違い回数順', wrongRandom:'間違いからランダム', retryWrong:'間違い再挑戦'})[m] || m;
+}
+
+async function recordSession(rec){
+  sessions.push(rec);
+  if(sessions.length>400) sessions = sessions.slice(-400);
+  try { localStorage.setItem('eigoSessions', JSON.stringify(sessions)); } catch(e){}
+  try {
+    await fetch(SUPA_URL+'/rest/v1/test_sessions', {
+      method: 'POST',
+      headers: { ...SUPA_HEADERS, 'Prefer': 'return=minimal' },
+      body: JSON.stringify({
+        range_from: rec.from, range_to: rec.to, mode: rec.mode,
+        total: rec.total, correct: rec.correct, wrong: rec.wrong,
+        device: DEVICE_ID
+      })
+    });
+  } catch(e){ console.warn('recordSession:', e); }
+}
+
+// --- parent password (synced via app_config; null = not set, undefined = offline) ---
+async function getParentHashRemote(){
+  try {
+    const r = await fetch(SUPA_URL+'/rest/v1/app_config?key=eq.parent_pw&select=value', { headers: SUPA_HEADERS });
+    if(!r.ok) return undefined;
+    const rows = await r.json();
+    return rows.length ? rows[0].value : null;
+  } catch(e){ return undefined; }
+}
+async function setParentHashRemote(h){
+  try {
+    await fetch(SUPA_URL+'/rest/v1/app_config', {
+      method: 'POST',
+      headers: { ...SUPA_HEADERS, 'Prefer': 'resolution=merge-duplicates' },
+      body: JSON.stringify({ key:'parent_pw', value:h, updated_at:new Date().toISOString() })
+    });
+  } catch(e){ console.warn('setParentHash:', e); }
+}
+
+let parentSetMode = false;
+
+$('parentBtn').onclick = openParent;
+async function openParent(){
+  $('parentPwErr').textContent = '';
+  $('parentPwInput').value = '';
+  $('parentPwInput2').value = '';
+  $('parentDash').classList.add('hide');
+  $('parentGate').classList.remove('hide');
+  show('parent');
+  const remote = await getParentHashRemote();
+  const local = localStorage.getItem('eigoParentPwHash');
+  let hash;
+  if(remote === undefined) hash = local;          // offline: trust this device
+  else if(remote === null)  hash = local || null; // not set in cloud
+  else hash = remote;                             // set in cloud
+  if(!hash){
+    parentSetMode = true;
+    $('parentGateNote').textContent = '初回設定: 保護者パスワードを決めてください（お子さんには教えないでください）';
+    $('parentPwInput2').classList.remove('hide');
+    $('parentPwBtn').textContent = '設定';
+  } else {
+    parentSetMode = false;
+    $('parentGateNote').textContent = '保護者パスワードを入力してください';
+    $('parentPwInput2').classList.add('hide');
+    $('parentPwBtn').textContent = '確認';
+    $('parentGate').dataset.hash = hash;
+  }
+  setTimeout(()=>$('parentPwInput').focus(), 50);
+}
+
+$('parentGateForm').onsubmit = async (e)=>{
+  e.preventDefault();
+  const v = $('parentPwInput').value;
+  if(!v) return;
+  if(parentSetMode){
+    if(v.length < 4){ $('parentPwErr').textContent = '4文字以上にしてください'; return; }
+    if(v !== $('parentPwInput2').value){ $('parentPwErr').textContent = 'パスワードが一致しません'; return; }
+    const h = await sha256(v);
+    localStorage.setItem('eigoParentPwHash', h);
+    setParentHashRemote(h);
+    parentSetMode = false;
+    openDash();
+  } else {
+    const h = await sha256(v);
+    const stored = $('parentGate').dataset.hash || localStorage.getItem('eigoParentPwHash');
+    if(h === stored){
+      localStorage.setItem('eigoParentPwHash', stored);
+      openDash();
+    } else {
+      $('parentPwErr').textContent = 'パスワードが違います';
+      $('parentPwInput').value = '';
+    }
+  }
+};
+
+$('parentCancelBtn').onclick = ()=> show('setup');
+$('parentBackBtn').onclick = ()=> show('setup');
+$('parentRefreshBtn').onclick = ()=> loadDash();
+$('parentChangePwBtn').onclick = ()=>{
+  parentSetMode = true;
+  $('parentDash').classList.add('hide');
+  $('parentGate').classList.remove('hide');
+  $('parentGateNote').textContent = '新しい保護者パスワードを設定してください';
+  $('parentPwInput').value = ''; $('parentPwInput2').value = '';
+  $('parentPwInput2').classList.remove('hide');
+  $('parentPwBtn').textContent = '変更';
+  $('parentPwErr').textContent = '';
+  setTimeout(()=>$('parentPwInput').focus(), 50);
+};
+
+function openDash(){
+  $('parentGate').classList.add('hide');
+  $('parentDash').classList.remove('hide');
+  loadDash();
+}
+
+async function fetchRemoteSessions(){
+  try {
+    const r = await fetch(SUPA_URL+'/rest/v1/test_sessions?select=created_at,range_from,range_to,mode,total,correct,wrong,device&order=created_at.desc&limit=600', { headers: SUPA_HEADERS });
+    if(!r.ok) return null;
+    return await r.json();
+  } catch(e){ return null; }
+}
+
+function jstParts(iso){
+  const d = new Date(iso);
+  return {
+    day: d.toLocaleDateString('ja-JP', { timeZone:'Asia/Tokyo', year:'numeric', month:'long', day:'numeric', weekday:'short' }),
+    time: d.toLocaleTimeString('ja-JP', { timeZone:'Asia/Tokyo', hour:'2-digit', minute:'2-digit' }),
+    dkey: d.toLocaleDateString('en-CA', { timeZone:'Asia/Tokyo' })
+  };
+}
+
+async function loadDash(){
+  $('parentLoading').classList.remove('hide');
+  $('parentLoading').textContent = '読み込み中...';
+  $('parentList').innerHTML = '';
+  $('parentStats').innerHTML = '';
+  const remote = await fetchRemoteSessions();
+  let list;
+  if(remote){
+    list = remote.map(r=>({ ts:r.created_at, from:r.range_from, to:r.range_to, mode:r.mode, total:r.total, correct:r.correct, wrong:r.wrong }));
+    $('parentLoading').classList.add('hide');
+  } else {
+    list = sessions.slice();
+    $('parentLoading').textContent = '⚠ クラウドに接続できません。この端末の記録のみ表示中。';
+  }
+  if(!list.length){
+    $('parentList').innerHTML = '<div class="pm-empty">まだテスト記録がありません</div>';
+    return;
+  }
+  list.sort((a,b)=> new Date(b.ts) - new Date(a.ts));
+  renderStats(list);
+  renderSessions(list);
+}
+
+function renderStats(list){
+  const todayKey = new Date().toLocaleDateString('en-CA', { timeZone:'Asia/Tokyo' });
+  const now = Date.now(), weekAgo = now - 7*864e5;
+  let todayN=0, weekN=0, totalQ=0, totalC=0;
+  const dayset = new Set();
+  list.forEach(s=>{
+    const k = jstParts(s.ts).dkey;
+    dayset.add(k);
+    if(k===todayKey) todayN++;
+    if(new Date(s.ts).getTime() >= weekAgo) weekN++;
+    totalQ += s.total||0; totalC += s.correct||0;
+  });
+  const avg = totalQ ? Math.round(totalC/totalQ*100) : 0;
+  let streak = 0;
+  for(let i=0;i<400;i++){
+    const k = new Date(now - i*864e5).toLocaleDateString('en-CA', { timeZone:'Asia/Tokyo' });
+    if(dayset.has(k)) streak++;
+    else if(i===0) continue;
+    else break;
+  }
+  const cells = [
+    [todayN, '今日のテスト'],
+    [weekN, '今週(7日間)'],
+    [list.length, '累計テスト'],
+    [totalQ, '累計出題数'],
+    [avg+'%', '平均正答率'],
+    [streak+'日', '連続学習'],
+  ];
+  $('parentStats').innerHTML = cells.map(([v,l])=>
+    `<div class="pm-stat"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
+}
+
+function renderSessions(list){
+  const wrap = $('parentList');
+  wrap.innerHTML = '';
+  let curDay = '';
+  list.forEach(s=>{
+    const f = jstParts(s.ts);
+    if(f.day !== curDay){
+      curDay = f.day;
+      const dh = document.createElement('div');
+      dh.className = 'pm-day';
+      dh.textContent = f.day;
+      wrap.appendChild(dh);
+    }
+    const total = s.total||0;
+    const pct = total ? Math.round((s.correct/total)*100) : 0;
+    const cls = pct>=80 ? 'good' : (pct>=50 ? 'mid' : 'bad');
+    const rangeTxt = (s.from!=null && s.to!=null) ? `No.${s.from}-${s.to}` : modeLabel(s.mode);
+    const el = document.createElement('div');
+    el.className = 'pm-sess';
+    el.innerHTML =
+      `<span class="t">${f.time}</span>` +
+      `<span class="meta">${rangeTxt} <small>/ ${modeLabel(s.mode)} / ${total}問</small></span>` +
+      `<span class="sc ${cls}">${s.correct}/${total}・${pct}%</span>`;
+    wrap.appendChild(el);
+  });
+}
 
 // sync on page load if already unlocked in this browser
 if(localStorage.getItem('eigoUnlocked')==='1'){ syncFromCloud(); }
